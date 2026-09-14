@@ -1,0 +1,452 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum PhaseStatus {
+  LOCKED
+  PLANNED
+  IN_PROGRESS
+  VALIDATED
+  REOPENED
+}
+
+enum TaskStatus {
+  TODO
+  IN_PROGRESS
+  DONE
+  BLOCKED
+}
+
+enum TaskPriority {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+enum QuestionnaireStatus {
+  DRAFT
+  ACTIVE
+  ARCHIVED
+}
+
+enum QuestionType {
+  TEXT
+  LONG_TEXT
+  NUMBER
+  BOOLEAN
+  SINGLE_CHOICE
+  MULTIPLE_CHOICE
+  DATE
+}
+
+enum InterviewStatus {
+  PLANNED
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+enum EvidenceType {
+  DOCUMENT
+  IMAGE
+  SPREADSHEET
+  LINK
+  INTERVIEW
+  NOTE
+  OTHER
+}
+
+enum EvidenceStatus {
+  PENDING
+  VERIFIED
+  REJECTED
+}
+
+enum CriterionAssessmentStatus {
+  PENDING
+  SATISFIED
+  NOT_SATISFIED
+}
+
+enum DecisionType {
+  GO
+  PIVOT
+  NO_GO
+}
+
+enum GlobalRole {
+  ADMIN
+  USER
+}
+
+enum ProjectMemberRole {
+  PROJECT_MANAGER
+  VIEWER
+}
+
+model Project {
+  id          String   @id @default(cuid())
+  name        String
+  description String?
+  startDate   DateTime?
+  endDate     DateTime?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  phases      Phase[]
+  decisions   ProjectDecision[]
+  members     ProjectMember[]
+}
+
+model User {
+  id           String      @id @default(cuid())
+  email        String      @unique
+  passwordHash String
+  globalRole   GlobalRole  @default(USER)
+  isActive     Boolean     @default(true)
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+
+  projectMemberships ProjectMember[]
+  auditLogs         AuditLog[]
+  pushTokens        PushToken[]
+
+  @@index([email])
+}
+
+model ProjectMember {
+  id        String            @id @default(cuid())
+  projectId String
+  userId    String
+  role      ProjectMemberRole
+  createdAt DateTime          @default(now())
+  updatedAt DateTime          @updatedAt
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, userId])
+  @@index([projectId])
+  @@index([userId])
+}
+
+model Phase {
+  id          String      @id @default(cuid())
+  projectId   String
+  name        String
+  description String?
+  order       Int
+  status      PhaseStatus @default(PLANNED)
+  startDate   DateTime?
+  endDate     DateTime?
+  deadline    DateTime?
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  project     Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  objectives  Objective[]
+  criteria    Criterion[]
+  tasks       Task[]
+  questionnaires Questionnaire[]
+  interviews  Interview[]
+  evidences   Evidence[]
+  coverageRequirements CoverageRequirement[]
+  validations PhaseValidation[]
+
+  @@unique([projectId, order])
+  @@index([projectId])
+}
+
+model Objective {
+  id          String   @id @default(cuid())
+  phaseId     String
+  name        String
+  description String?
+  order       Int
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  phase       Phase      @relation(fields: [phaseId], references: [id], onDelete: Cascade)
+  criteria    Criterion[]
+  tasks       Task[]
+  questions   Question[]
+  coverageRequirements CoverageRequirement[]
+
+  @@unique([phaseId, order])
+  @@index([phaseId])
+}
+
+model Criterion {
+  id          String   @id @default(cuid())
+  phaseId     String
+  objectiveId String?
+  name        String
+  description String?
+  required    Boolean  @default(false)
+  order       Int
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  phase       Phase      @relation(fields: [phaseId], references: [id], onDelete: Cascade)
+  objective   Objective? @relation(fields: [objectiveId], references: [id], onDelete: SetNull)
+  tasks       Task[]
+  evidences   Evidence[]
+  assessment  CriterionAssessment?
+
+  @@unique([phaseId, order])
+  @@index([phaseId])
+  @@index([objectiveId])
+}
+
+model Task {
+  id          String       @id @default(cuid())
+  phaseId     String
+  objectiveId String?
+  criterionId String?
+  title       String
+  description String?
+  status      TaskStatus   @default(TODO)
+  priority    TaskPriority @default(MEDIUM)
+  deadline    DateTime?
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  phase       Phase      @relation(fields: [phaseId], references: [id], onDelete: Cascade)
+  objective   Objective? @relation(fields: [objectiveId], references: [id], onDelete: SetNull)
+  criterion   Criterion? @relation(fields: [criterionId], references: [id], onDelete: SetNull)
+  evidences   Evidence[]
+
+  @@index([phaseId])
+  @@index([objectiveId])
+  @@index([criterionId])
+}
+
+model Questionnaire {
+  id          String              @id @default(cuid())
+  phaseId     String
+  name        String
+  description String?
+  version     Int                 @default(1)
+  status      QuestionnaireStatus @default(DRAFT)
+  createdAt   DateTime            @default(now())
+  updatedAt   DateTime            @updatedAt
+
+  phase       Phase       @relation(fields: [phaseId], references: [id], onDelete: Cascade)
+  questions   Question[]
+  interviews  Interview[]
+
+  @@index([phaseId])
+}
+
+model Question {
+  id              String       @id @default(cuid())
+  questionnaireId String
+  text            String
+  description     String?
+  type            QuestionType
+  required        Boolean      @default(false)
+  order           Int
+  objectiveId     String?
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  questionnaire   Questionnaire   @relation(fields: [questionnaireId], references: [id], onDelete: Cascade)
+  objective       Objective?      @relation(fields: [objectiveId], references: [id], onDelete: SetNull)
+  options         QuestionOption[]
+  responses       Response[]
+
+  @@unique([questionnaireId, order])
+  @@index([questionnaireId])
+  @@index([objectiveId])
+}
+
+model QuestionOption {
+  id         String   @id @default(cuid())
+  questionId String
+  label      String
+  value      String
+  order      Int
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  question   Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
+
+  @@unique([questionId, order])
+  @@index([questionId])
+}
+
+model Interview {
+  id             String          @id @default(cuid())
+  phaseId        String
+  questionnaireId String
+  respondentName String
+  respondentRole String?
+  organization   String?
+  startedAt      DateTime?
+  completedAt    DateTime?
+  status         InterviewStatus @default(PLANNED)
+  notes          String?
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+
+  phase          Phase           @relation(fields: [phaseId], references: [id], onDelete: Cascade)
+  questionnaire  Questionnaire   @relation(fields: [questionnaireId], references: [id], onDelete: Cascade)
+  responses      Response[]
+  evidences      Evidence[]
+
+  @@index([phaseId])
+  @@index([questionnaireId])
+}
+
+model Response {
+  id          String   @id @default(cuid())
+  interviewId String
+  questionId  String
+  value       String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  interview   Interview @relation(fields: [interviewId], references: [id], onDelete: Cascade)
+  question    Question  @relation(fields: [questionId], references: [id], onDelete: Cascade)
+
+  @@unique([interviewId, questionId])
+  @@index([interviewId])
+  @@index([questionId])
+}
+
+model Evidence {
+  id           String         @id @default(cuid())
+  phaseId      String
+  criterionId  String?
+  taskId       String?
+  interviewId  String?
+  title        String
+  description  String?
+  type         EvidenceType
+  source       String
+  url          String?
+  filePath     String?
+  originalFileName String?
+  mimeType     String?
+  fileSize     Int?
+  note         String?
+  status       EvidenceStatus @default(PENDING)
+  collectedAt  DateTime?
+  verifiedAt   DateTime?
+  verifiedBy   String?
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+
+  phase        Phase      @relation(fields: [phaseId], references: [id], onDelete: Cascade)
+  criterion    Criterion? @relation(fields: [criterionId], references: [id], onDelete: SetNull)
+  task         Task?      @relation(fields: [taskId], references: [id], onDelete: SetNull)
+  interview    Interview? @relation(fields: [interviewId], references: [id], onDelete: SetNull)
+  criterionAssessments CriterionAssessment[]
+
+  @@index([phaseId])
+  @@index([criterionId])
+  @@index([taskId])
+  @@index([interviewId])
+  @@index([status])
+}
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  userId     String?
+  action     String
+  entityType String
+  entityId   String?
+  projectId  String?
+  metadata   Json?
+  createdAt  DateTime @default(now())
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([projectId])
+  @@index([entityType, entityId])
+  @@index([createdAt])
+}
+
+model PushToken {
+  id         String   @id @default(cuid())
+  userId     String
+  token      String   @unique
+  platform   String
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  lastUsedAt DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model CoverageRequirement {
+  id                 String   @id @default(cuid())
+  phaseId            String
+  objectiveId        String?
+  name               String
+  description        String?
+  minimumInterviews  Int
+  required           Boolean  @default(true)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  phase              Phase      @relation(fields: [phaseId], references: [id], onDelete: Cascade)
+  objective          Objective? @relation(fields: [objectiveId], references: [id], onDelete: SetNull)
+
+  @@index([phaseId])
+  @@index([objectiveId])
+}
+
+model PhaseValidation {
+  id             String   @id @default(cuid())
+  phaseId        String
+  validatedAt    DateTime @default(now())
+  validatedBy    String?
+  note           String?
+  gatingSnapshot Json
+
+  phase          Phase    @relation(fields: [phaseId], references: [id], onDelete: Cascade)
+
+  @@index([phaseId])
+}
+
+model CriterionAssessment {
+  id          String                    @id @default(cuid())
+  criterionId String                    @unique
+  status      CriterionAssessmentStatus @default(PENDING)
+  note        String?
+  evidenceId  String?
+  assessedAt  DateTime?
+  assessedBy  String?
+  createdAt   DateTime                  @default(now())
+  updatedAt   DateTime                  @updatedAt
+
+  criterion Criterion @relation(fields: [criterionId], references: [id], onDelete: Cascade)
+  evidence  Evidence? @relation(fields: [evidenceId], references: [id], onDelete: SetNull)
+
+  @@index([evidenceId])
+}
+
+model ProjectDecision {
+  id             String       @id @default(cuid())
+  projectId      String
+  type           DecisionType
+  rationale      String
+  nextSteps      String?
+  decidedBy      String?
+  decidedAt      DateTime     @default(now())
+  reportSnapshot Json
+
+  project        Project      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId])
+  @@index([decidedAt])
+}
