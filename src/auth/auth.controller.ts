@@ -16,13 +16,13 @@ export class AuthController {
   @Post('login')
   async login(@Body() dto: LoginDto, @Res({ passthrough: true }) response: Response) {
     const token = await this.authService.login(dto);
-    response.cookie('pcc_access_token', token, { httpOnly: true, sameSite: 'lax', secure: process.env.NODE_ENV === 'production', maxAge: this.cookieMaxAge() });
+    response.cookie('pcc_access_token', token, { httpOnly: true, sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax', secure: process.env.NODE_ENV === 'production', maxAge: this.cookieMaxAge() });
     return { authenticated: true };
   }
 
   @Post('logout')
   logout(@Res({ passthrough: true }) response: Response) {
-    response.clearCookie('pcc_access_token', { httpOnly: true, sameSite: 'lax', secure: process.env.NODE_ENV === 'production' });
+    response.clearCookie('pcc_access_token', { httpOnly: true, sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax', secure: process.env.NODE_ENV === 'production' });
     return { authenticated: false };
   }
 

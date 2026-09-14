@@ -10,6 +10,9 @@ async function bootstrap() {
     origin: process.env.FRONTEND_URL ?? 'http://localhost:3001',
     credentials: true,
   });
+  app.getHttpAdapter().get('/health', (_request, response) => {
+    response.status(200).json({ status: 'ok' });
+  });
   app.useGlobalPipes(
     new TrimStringsPipe(),
     new ValidationPipe({
@@ -18,6 +21,6 @@ async function bootstrap() {
       transform: true,
     }),
   );
-  await app.listen(process.env.PORT ?? 3000);
+  await app.listen(process.env.PORT ?? 3000, '0.0.0.0');
 }
 await bootstrap();
