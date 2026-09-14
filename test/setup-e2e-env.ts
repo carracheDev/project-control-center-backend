@@ -16,8 +16,8 @@ import * as path from 'path';
 
 const envTestPath = path.resolve(process.cwd(), '.env.test');
 
-// Step 1: Load default .env
-const defaultEnvResult = dotenv.config();
+// Step 1: Load default .env (kept intentionally for compatibility; no unused variables)
+dotenv.config();
 
 // Step 2: Load and override with .env.test
 const testEnvResult = dotenv.config({
