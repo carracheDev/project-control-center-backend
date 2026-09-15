@@ -15,6 +15,11 @@ export class UpdateTaskDto {
   @IsOptional()
   @IsString()
   @IsNotEmpty()
+  assigneeId?: string | null;
+
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
   title?: string;
 
   @IsOptional()

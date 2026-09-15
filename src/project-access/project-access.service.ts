@@ -59,6 +59,7 @@ export class ProjectAccessService {
     if (resource === 'criterionAssessment') return (await this.prisma.criterionAssessment.findUnique({ where: { id }, select: { criterion: { select } } }))?.criterion?.phase?.projectId ?? null;
     if (resource === 'phaseValidation') return (await this.prisma.phaseValidation.findUnique({ where: { id }, select: { phase: { select: { projectId: true } } } }))?.phase.projectId ?? null;
     if (resource === 'decision') return (await this.prisma.projectDecision.findUnique({ where: { id }, select: { projectId: true } }))?.projectId ?? null;
+    if (resource === 'risk') return (await this.prisma.risk.findUnique({ where: { id }, select: { projectId: true } }))?.projectId ?? null;
     if (resource === 'projectMember') return (await this.prisma.projectMember.findUnique({ where: { id }, select: { projectId: true } }))?.projectId ?? null;
     return null;
   }

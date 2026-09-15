@@ -3,10 +3,11 @@ import { CriterionAssessmentStatus, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { CreateCriterionAssessmentDto } from './dto/create-criterion-assessment.dto.js';
 import { UpdateCriterionAssessmentDto } from './dto/update-criterion-assessment.dto.js';
+import { CorrectiveTaskService } from '../tasks/corrective-task.service.js';
 
 @Injectable()
 export class CriterionAssessmentService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(private readonly prisma: PrismaService, private readonly correctiveTasks: CorrectiveTaskService) {}
 
   async create(criterionId: string, dto: CreateCriterionAssessmentDto) {
     const criterion = await this.getCriterion(criterionId);
@@ -14,7 +15,7 @@ export class CriterionAssessmentService {
     const status = dto.status ?? CriterionAssessmentStatus.PENDING;
 
     try {
-      return await this.prisma.criterionAssessment.create({
+      const assessment = await this.prisma.criterionAssessment.create({
         data: {
           criterionId,
           status,
@@ -25,6 +26,7 @@ export class CriterionAssessmentService {
         },
         include: { evidence: true },
       });
+      return this.withAutomation(assessment, criterion, status);
     } catch (error) {
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
         throw new ConflictException(`Criterion ${criterionId} already has an assessment`);
@@ -45,7 +47,7 @@ export class CriterionAssessmentService {
     const status = dto.status ?? current.status;
     const statusChanged = dto.status !== undefined && dto.status !== current.status;
 
-    return this.prisma.criterionAssessment.update({
+    const assessment = await this.prisma.criterionAssessment.update({
       where: { id },
       data: {
         status: dto.status,
@@ -56,6 +58,14 @@ export class CriterionAssessmentService {
       },
       include: { evidence: true },
     });
+    return this.withAutomation(assessment, criterion, status);
+  }
+
+  private async withAutomation<T extends { status: CriterionAssessmentStatus }>(assessment: T, criterion: { id: string; phaseId: string }, status: CriterionAssessmentStatus) {
+    if (status !== CriterionAssessmentStatus.NOT_SATISFIED) return { ...assessment, automation: { correctiveTaskCreated: false } };
+    const criterionDetails = await this.prisma.criterion.findUnique({ where: { id: criterion.id }, select: { name: true } });
+    const correctiveTask = await this.correctiveTasks.createForCriterion({ phaseId: criterion.phaseId, title: criterionDetails?.name ?? criterion.id });
+    return { ...assessment, automation: correctiveTask ? { correctiveTaskCreated: true, taskId: correctiveTask.id } : { correctiveTaskCreated: false } };
   }
 
   async remove(id: string) {

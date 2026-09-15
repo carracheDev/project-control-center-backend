@@ -12,6 +12,11 @@ export class CreateTaskDto {
   @IsNotEmpty()
   criterionId?: string;
 
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  assigneeId?: string;
+
   @IsString()
   @IsNotEmpty()
   title!: string;

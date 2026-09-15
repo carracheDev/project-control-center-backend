@@ -1,4 +1,5 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { NotificationStatus } from '@prisma/client';
 import { getApps, initializeApp, cert } from 'firebase-admin/app';
 import { getMessaging } from 'firebase-admin/messaging';
 import { PrismaService } from '../prisma/prisma.service.js';
@@ -32,7 +33,37 @@ export class NotificationService {
   async notifyProject(projectId: string, title: string, body: string, data: Record<string, string> = {}): Promise<number> {
     const memberships = await this.prisma.projectMember.findMany({ where: { projectId }, select: { userId: true } });
     const admins = await this.prisma.user.findMany({ where: { globalRole: 'ADMIN', isActive: true }, select: { id: true } });
-    return this.sendToUsers([...new Set([...memberships.map((item) => item.userId), ...admins.map((item) => item.id)])], title, body, { projectId, ...data });
+    const userIds = [...new Set([...memberships.map((item) => item.userId), ...admins.map((item) => item.id)])];
+    await Promise.all(userIds.map((userId) => this.prisma.notification.upsert({
+      where: { dedupeKey: `${userId}:${projectId}:${data.entityType ?? title}:${data.entityId ?? body}` },
+      update: {},
+      create: {
+        userId,
+        projectId,
+        title,
+        body,
+        entityType: data.entityType,
+        entityId: data.entityId,
+        dedupeKey: `${userId}:${projectId}:${data.entityType ?? title}:${data.entityId ?? body}`,
+      },
+    })));
+    return this.sendToUsers(userIds, title, body, { projectId, ...data });
+  }
+
+  findForUser(userId: string) {
+    return this.prisma.notification.findMany({ where: { userId, status: { not: NotificationStatus.RESOLVED } }, orderBy: { createdAt: 'desc' }, take: 30 });
+  }
+
+  async markRead(userId: string, id: string) {
+    const result = await this.prisma.notification.updateMany({ where: { id, userId, status: NotificationStatus.UNREAD }, data: { status: NotificationStatus.READ, readAt: new Date() } });
+    if (!result.count) throw new NotFoundException(`Notification ${id} not found`);
+    return this.prisma.notification.findUnique({ where: { id } });
+  }
+
+  async resolve(userId: string, id: string) {
+    const result = await this.prisma.notification.updateMany({ where: { id, userId, status: { not: NotificationStatus.RESOLVED } }, data: { status: NotificationStatus.RESOLVED, resolvedAt: new Date(), readAt: new Date() } });
+    if (!result.count) throw new NotFoundException(`Notification ${id} not found`);
+    return this.prisma.notification.findUnique({ where: { id } });
   }
 
   private getMessaging() {

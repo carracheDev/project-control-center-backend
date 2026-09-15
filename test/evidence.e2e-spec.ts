@@ -69,7 +69,9 @@ describe('Evidence (e2e)', () => {
   it('rejects invalid verification transition and supports deletion', async () => {
     const phase = await createPhase('Evidence transitions');
     const evidence = await request(app.getHttpServer()).post(`/phases/${phase.id}/evidence`).send({ title: 'Reject me', type: 'NOTE', source: 'FIELD', note: 'Review required' }).expect(201);
-    await request(app.getHttpServer()).post(`/evidence/${evidence.body.id}/reject`).send({ verifiedBy: 'reviewer' }).expect(201);
+    const rejected = await request(app.getHttpServer()).post(`/evidence/${evidence.body.id}/reject`).send({ verifiedBy: 'reviewer' }).expect(201);
+    expect(rejected.body.automation).toEqual(expect.objectContaining({ correctiveTaskCreated: true }));
+    expect((await request(app.getHttpServer()).get(`/phases/${phase.id}/tasks`).expect(200)).body).toEqual(expect.arrayContaining([expect.objectContaining({ title: '[Preuve rejetée] Reject me', priority: 'HIGH' })]));
     await request(app.getHttpServer()).post(`/evidence/${evidence.body.id}/verify`).send({ verifiedBy: 'reviewer' }).expect(409);
     await request(app.getHttpServer()).delete(`/evidence/${evidence.body.id}`).expect(200);
   });

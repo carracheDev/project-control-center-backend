@@ -65,6 +65,8 @@ describe('Criterion assessments (e2e)', () => {
     const otherEvidence = await request(app.getHttpServer()).post(`/phases/${otherPhase.body.id}/evidence`).send({ title: 'Other note', type: 'NOTE', source: 'manual', note: 'Other phase' }).expect(201);
     await request(app.getHttpServer()).patch(`/criterion-assessments/${pending.body.id}`).send({ evidenceId: otherEvidence.body.id }).expect(422);
     await request(app.getHttpServer()).patch(`/criterion-assessments/${pending.body.id}`).send({ status: 'NOT_SATISFIED' }).expect(200);
+    const correctiveTasks = await request(app.getHttpServer()).get(`/phases/${phase.body.id}/tasks`).expect(200);
+    expect(correctiveTasks.body).toEqual(expect.arrayContaining([expect.objectContaining({ title: '[Critère non satisfait] Problem defined', priority: 'HIGH' })]));
     const notSatisfiedGating = await request(app.getHttpServer()).get(`/phases/${phase.body.id}/gating`).expect(200);
     expect(notSatisfiedGating.body.blockers).toContain('Problem defined');
 

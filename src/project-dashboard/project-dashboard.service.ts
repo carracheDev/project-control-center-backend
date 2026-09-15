@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { CriterionAssessmentStatus, EvidenceStatus, InterviewStatus, PhaseStatus, TaskStatus } from '@prisma/client';
+import { CriterionAssessmentStatus, EvidenceStatus, InterviewStatus, PhaseStatus, RiskStatus, TaskStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service.js';
 import type { AuthenticatedUser } from '../auth/types/authenticated-user.js';
 import { ProjectAccessService } from '../project-access/project-access.service.js';
@@ -8,6 +8,7 @@ export interface DashboardAttentionItem {
   type: 'PHASE' | 'GATING' | 'TASK' | 'CRITERION' | 'COVERAGE' | 'EVIDENCE';
   severity: 'HIGH' | 'WARNING';
   phaseId: string;
+  target: { type: 'PHASE' | 'TASK' | 'CRITERION' | 'COVERAGE' | 'EVIDENCE'; id: string };
   message: string;
 }
 
@@ -22,6 +23,8 @@ export interface ProjectDashboardCard {
   coverage: { total: number; required: number; satisfied: number; unsatisfied: number };
   interviews: { total: number; completed: number };
   evidence: { total: number; verified: number; pending: number; rejected: number };
+  risks: { total: number; open: number; critical: number };
+  health: { score: number; status: 'HEALTHY' | 'AT_RISK' | 'CRITICAL'; label: string };
   attention: { hasBlockers: boolean; items: DashboardAttentionItem[] };
 }
 
@@ -43,6 +46,9 @@ export interface ProjectDashboardResult {
     completedProjects: number;
     blockedProjects: number;
     projectsNeedingAttention: number;
+    health: { healthy: number; atRisk: number; critical: number };
+    openRisks: number;
+    criticalRisks: number;
   };
   projects: ProjectDashboardCard[];
   recentValidations: DashboardValidation[];
@@ -66,7 +72,7 @@ export class ProjectDashboardService {
         phases: {
           orderBy: { order: 'asc' },
           include: {
-            tasks: { select: { status: true } },
+            tasks: { select: { id: true, title: true, status: true } },
             criteria: {
               where: { required: true },
               select: { id: true, name: true, assessment: { select: { status: true } } },
@@ -77,13 +83,14 @@ export class ProjectDashboardService {
                 responses: { select: { question: { select: { objectiveId: true } } } },
               },
             },
-            evidences: { select: { title: true, status: true } },
+            evidences: { select: { id: true, title: true, status: true } },
             coverageRequirements: {
               select: { id: true, name: true, objectiveId: true, minimumInterviews: true, required: true },
             },
             validations: { select: { id: true, validatedAt: true, validatedBy: true, note: true } },
           },
         },
+        risks: { select: { status: true, probability: true, impact: true } },
       },
     });
 
@@ -108,6 +115,13 @@ export class ProjectDashboardService {
     })));
     const completedProjects = cards.filter((card) => card.progress.totalPhases > 0 && card.progress.completedPhases === card.progress.totalPhases).length;
     const blockedProjects = cards.filter((card) => card.attention.hasBlockers).length;
+    const health = {
+      healthy: cards.filter((card) => card.health.status === 'HEALTHY').length,
+      atRisk: cards.filter((card) => card.health.status === 'AT_RISK').length,
+      critical: cards.filter((card) => card.health.status === 'CRITICAL').length,
+    };
+    const openRisks = cards.reduce((total, card) => total + card.risks.open, 0);
+    const criticalRisks = cards.reduce((total, card) => total + card.risks.critical, 0);
 
     return {
       summary: {
@@ -116,6 +130,9 @@ export class ProjectDashboardService {
         completedProjects,
         blockedProjects,
         projectsNeedingAttention: cards.filter((card) => card.attention.items.length > 0).length,
+        health,
+        openRisks,
+        criticalRisks,
       },
       projects: cards,
       recentValidations,
@@ -134,6 +151,8 @@ export class ProjectDashboardService {
     const allCriteria = phases.flatMap((item) => item.criteria);
     const allCoverageRequirements = phases.flatMap((item) => item.coverageRequirements);
     const attention = phases.flatMap((item) => this.getPhaseAttention(item));
+    const risks = project.risks;
+    const health = this.calculateHealth(attention, risks);
     const requiredCoverageRequirements = allCoverageRequirements.filter((requirement) => requirement.required);
     const satisfiedCoverageRequirements = requiredCoverageRequirements.filter((requirement) => {
       const covered = requirement.objectiveId === null
@@ -179,8 +198,25 @@ export class ProjectDashboardService {
         pending: allEvidence.filter((item) => item.status === EvidenceStatus.PENDING).length,
         rejected: allEvidence.filter((item) => item.status === EvidenceStatus.REJECTED).length,
       },
+      risks: {
+        total: risks.length,
+        open: risks.filter((risk) => risk.status === RiskStatus.OPEN).length,
+        critical: risks.filter((risk) => risk.status === RiskStatus.OPEN && risk.probability * risk.impact >= 15).length,
+      },
+      health,
       attention: { hasBlockers: attention.some((item) => item.severity === 'HIGH'), items: attention },
     };
+  }
+
+  private calculateHealth(attention: DashboardAttentionItem[], risks: RiskDashboardData[]): ProjectDashboardCard['health'] {
+    const highCount = attention.filter((item) => item.severity === 'HIGH').length;
+    const warningCount = attention.filter((item) => item.severity === 'WARNING').length;
+    const criticalRiskCount = risks.filter((risk) => risk.status === RiskStatus.OPEN && risk.probability * risk.impact >= 15).length;
+    const openRiskCount = risks.filter((risk) => risk.status === RiskStatus.OPEN).length;
+    const score = Math.max(0, 100 - highCount * 15 - warningCount * 5 - criticalRiskCount * 20 - Math.max(0, openRiskCount - criticalRiskCount) * 8);
+    if (score < 50) return { score, status: 'CRITICAL', label: 'Critique' };
+    if (score < 80) return { score, status: 'AT_RISK', label: 'À surveiller' };
+    return { score, status: 'HEALTHY', label: 'Maîtrisé' };
   }
 
   private findCurrentPhase(phases: PhaseWithDashboardData[]) {
@@ -198,27 +234,24 @@ export class ProjectDashboardService {
   private getPhaseAttention(phase: PhaseWithDashboardData): DashboardAttentionItem[] {
     const items: DashboardAttentionItem[] = [];
     if (phase.status === PhaseStatus.LOCKED) {
-      items.push({ type: 'PHASE', severity: 'HIGH', phaseId: phase.id, message: `La phase '${phase.name}' est verrouillée car la phase précédente n'est pas validée.` });
+      items.push({ type: 'PHASE', severity: 'HIGH', phaseId: phase.id, target: { type: 'PHASE', id: phase.id }, message: `La phase '${phase.name}' est verrouillée car la phase précédente n'est pas validée.` });
     }
-    const blockedTasks = phase.tasks.filter((task) => task.status === TaskStatus.BLOCKED).length;
-    if (blockedTasks > 0) {
-      items.push({ type: 'TASK', severity: 'HIGH', phaseId: phase.id, message: `${blockedTasks} tâche${blockedTasks > 1 ? 's' : ''} est${blockedTasks > 1 ? 'ent' : ''} bloquée${blockedTasks > 1 ? 's' : ''}.` });
+    for (const task of phase.tasks.filter((item) => item.status === TaskStatus.BLOCKED)) {
+      items.push({ type: 'TASK', severity: 'HIGH', phaseId: phase.id, target: { type: 'TASK', id: task.id }, message: `La tâche '${task.title}' est bloquée.` });
     }
-    const unsatisfiedCriteria = phase.criteria.filter((criterion) => criterion.assessment?.status !== CriterionAssessmentStatus.SATISFIED).length;
-    if (unsatisfiedCriteria > 0) {
-      items.push({ type: 'CRITERION', severity: 'HIGH', phaseId: phase.id, message: `${unsatisfiedCriteria} critère${unsatisfiedCriteria > 1 ? 's' : ''} requis n'est${unsatisfiedCriteria > 1 ? ' pas' : ' pas'} satisfait.` });
+    for (const criterion of phase.criteria.filter((item) => item.assessment?.status !== CriterionAssessmentStatus.SATISFIED)) {
+      items.push({ type: 'CRITERION', severity: 'HIGH', phaseId: phase.id, target: { type: 'CRITERION', id: criterion.id }, message: `Le critère requis '${criterion.name}' n'est pas satisfait.` });
     }
     for (const requirement of phase.coverageRequirements.filter((item) => item.required)) {
       const covered = requirement.objectiveId === null
         ? phase.interviews.filter((interview) => interview.status === InterviewStatus.COMPLETED).length
         : phase.interviews.filter((interview) => interview.status === InterviewStatus.COMPLETED && interview.responses.some((response) => response.question.objectiveId === requirement.objectiveId)).length;
       if (covered < requirement.minimumInterviews) {
-        items.push({ type: 'COVERAGE', severity: 'HIGH', phaseId: phase.id, message: `La couverture '${requirement.name}' est insuffisante : ${covered}/${requirement.minimumInterviews} interviews.` });
+        items.push({ type: 'COVERAGE', severity: 'HIGH', phaseId: phase.id, target: { type: 'COVERAGE', id: requirement.id }, message: `La couverture '${requirement.name}' est insuffisante : ${covered}/${requirement.minimumInterviews} interviews.` });
       }
     }
-    const rejectedEvidence = phase.evidences.filter((item) => item.status === EvidenceStatus.REJECTED).length;
-    if (rejectedEvidence > 0) {
-      items.push({ type: 'EVIDENCE', severity: 'WARNING', phaseId: phase.id, message: `${rejectedEvidence} evidence${rejectedEvidence > 1 ? 's' : ''} rejetée${rejectedEvidence > 1 ? 's' : ''}.` });
+    for (const evidence of phase.evidences.filter((item) => item.status === EvidenceStatus.REJECTED)) {
+      items.push({ type: 'EVIDENCE', severity: 'WARNING', phaseId: phase.id, target: { type: 'EVIDENCE', id: evidence.id }, message: `La preuve '${evidence.title}' a été rejetée.` });
     }
     return items;
   }
@@ -229,17 +262,20 @@ type ProjectWithDashboardData = {
   name: string;
   description: string | null;
   phases: PhaseWithDashboardData[];
+  risks: RiskDashboardData[];
 };
+
+type RiskDashboardData = { status: RiskStatus; probability: number; impact: number };
 
 type PhaseWithDashboardData = {
   id: string;
   name: string;
   order: number;
   status: PhaseStatus;
-  tasks: { status: TaskStatus }[];
+  tasks: { id: string; title: string; status: TaskStatus }[];
   criteria: { id: string; name: string; assessment: { status: CriterionAssessmentStatus } | null }[];
   interviews: { status: InterviewStatus; responses: { question: { objectiveId: string | null } }[] }[];
-  evidences: { title: string; status: EvidenceStatus }[];
+  evidences: { id: string; title: string; status: EvidenceStatus }[];
   coverageRequirements: { id: string; name: string; objectiveId: string | null; minimumInterviews: number; required: boolean }[];
   validations: { id: string; validatedAt: Date; validatedBy: string | null; note: string | null }[];
 };

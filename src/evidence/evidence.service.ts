@@ -4,10 +4,11 @@ import { PrismaService } from '../prisma/prisma.service.js';
 import { CreateEvidenceDto } from './dto/create-evidence.dto.js';
 import { UpdateEvidenceDto } from './dto/update-evidence.dto.js';
 import { FileStorageService } from './file-storage.service.js';
+import { CorrectiveTaskService } from '../tasks/corrective-task.service.js';
 
 @Injectable()
 export class EvidenceService {
-  constructor(private readonly prisma: PrismaService, private readonly storage?: FileStorageService) {}
+  constructor(private readonly prisma: PrismaService, private readonly correctiveTasks: CorrectiveTaskService, private readonly storage?: FileStorageService) {}
 
   async createUploaded(phaseId: string, dto: CreateEvidenceDto, file: Express.Multer.File) {
     if (!this.storage) throw new BadRequestException('Evidence upload storage is unavailable');
@@ -126,10 +127,12 @@ export class EvidenceService {
       throw new ConflictException('Verified evidence cannot be rejected without an explicit metadata change');
     }
     if (evidence.status === EvidenceStatus.REJECTED) return evidence;
-    return this.prisma.evidence.update({
+    const rejected = await this.prisma.evidence.update({
       where: { id },
       data: { status: EvidenceStatus.REJECTED, verifiedAt: new Date(), verifiedBy },
     });
+    const correctiveTask = await this.correctiveTasks.createForEvidence({ phaseId: rejected.phaseId, title: rejected.title });
+    return { ...rejected, automation: correctiveTask ? { correctiveTaskCreated: true, taskId: correctiveTask.id } : { correctiveTaskCreated: false } };
   }
 
   private async getEvidence(id: string) {

@@ -15,6 +15,7 @@ import { ProjectsModule } from './projects/projects.module.js';
 import { AuthModule } from './auth/auth.module.js';
 import { ProjectAccessModule } from './project-access/project-access.module.js';
 import { ProjectMembersModule } from './project-members/project-members.module.js';
+import { RisksModule } from './risks/risks.module.js';
 import { QuestionsModule } from './questions/questions.module.js';
 import { QuestionnairesModule } from './questionnaires/questionnaires.module.js';
 import { ReadinessModule } from './readiness/readiness.module.js';
@@ -30,6 +31,7 @@ import { ProjectTimelineModule } from './project-timeline/project-timeline.modul
     AuthModule,
     ProjectAccessModule,
     ProjectMembersModule,
+    RisksModule,
     ProjectsModule,
     PhasesModule,
     ObjectivesModule,
