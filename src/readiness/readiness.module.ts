@@ -8,5 +8,6 @@ import { ReadinessService } from './readiness.service.js';
   imports: [PrismaModule, CoverageModule],
   controllers: [ReadinessController],
   providers: [ReadinessService],
+  exports: [ReadinessService],
 })
 export class ReadinessModule {}
