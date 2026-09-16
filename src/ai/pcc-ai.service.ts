@@ -115,11 +115,25 @@ export class PccAiService {
   ) {}
 
   async analyzePhase(phaseId: string): Promise<PccAiAnalysis> {
+    console.log('[PccAiService] ANALYZE started', { phaseId, model: this.model, groqConfigured: Boolean(this.groq) });
     if (!this.groq) {
+      console.log('[PccAiService] Groq client unavailable');
       throw new ServiceUnavailableException('Le service IA est indisponible: GROQ_API_KEY n’est pas configurée.');
     }
 
+    console.log('[PccAiService] Building phase context', { phaseId });
     const context = await this.buildPhaseContext(phaseId);
+    console.log('[PccAiService] Phase context ready', {
+      phaseId,
+      objectives: context.objectives.length,
+      criteria: context.criteria.length,
+      questionnaires: context.questionnaires.length,
+      interviews: context.interviews.length,
+      evidence: context.evidence.length,
+      ready: context.readiness.ready,
+      canValidate: context.gating.canValidate,
+    });
+    console.log('[PccAiService] Sending analysis to Groq', { phaseId, model: this.model });
     return this.requestAnalysis(context, 'Analyse cette phase PCC et explique clairement sa situation actuelle.');
   }
 
@@ -150,7 +164,11 @@ export class PccAiService {
         temperature: 0.1,
         max_tokens: 1_500,
       }, { signal: controller.signal });
-      return this.parseAnalysis(response.choices[0]?.message.content ?? undefined);
+      console.log('[PccAiService] Groq response received', { model: this.model, choices: response.choices.length });
+      console.log('[PccAiService] Parsing Groq JSON response');
+      const analysis = this.parseAnalysis(response.choices[0]?.message.content ?? undefined);
+      console.log('[PccAiService] Analysis completed', { status: analysis.status });
+      return analysis;
     } catch (error) {
       if (error instanceof ServiceUnavailableException || error instanceof BadGatewayException) throw error;
       if (controller.signal.aborted) throw new GatewayTimeoutException('Le service IA n’a pas répondu à temps.');
@@ -186,6 +204,7 @@ export class PccAiService {
   }
 
   async buildPhaseContext(phaseId: string): Promise<PccPhaseContext> {
+    console.log('[PccAiService] Prisma phase fetch started', { phaseId });
     const phase = await this.prisma.phase.findUnique({
       where: { id: phaseId },
       include: {
@@ -224,10 +243,20 @@ export class PccAiService {
       throw new BadGatewayException('Phase introuvable.');
     }
 
-    const [readiness, gating] = await Promise.all([
-      this.readinessService.calculate(phaseId),
-      this.gatingService.calculate(phaseId),
-    ]);
+    console.log('[PccAiService] Prisma phase fetch completed', { phaseId, projectId: phase.projectId });
+    const readinessPromise = (async () => {
+      console.log('[PccAiService] Readiness calculation started', { phaseId });
+      const result = await this.readinessService.calculate(phaseId);
+      console.log('[PccAiService] Readiness calculation completed', { phaseId, ready: result.ready, blockers: result.blockers.length });
+      return result;
+    })();
+    const gatingPromise = (async () => {
+      console.log('[PccAiService] Gating calculation started', { phaseId });
+      const result = await this.gatingService.calculate(phaseId);
+      console.log('[PccAiService] Gating calculation completed', { phaseId, canValidate: result.canValidate, blockers: result.blockers.length });
+      return result;
+    })();
+    const [readiness, gating] = await Promise.all([readinessPromise, gatingPromise]);
 
     return {
       project: {
