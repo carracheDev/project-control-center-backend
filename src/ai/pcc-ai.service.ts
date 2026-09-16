@@ -156,6 +156,26 @@ export class PccAiService {
     } catch (error) {
       if (error instanceof ServiceUnavailableException || error instanceof BadGatewayException) throw error;
       if (controller.signal.aborted) throw new GatewayTimeoutException('Le service IA n’a pas répondu à temps.');
+      const providerStatus = this.providerStatus(error);
+      const diagnostic = providerStatus === 401 || providerStatus === 403
+        ? 'provider_authentication'
+        : providerStatus === 429
+          ? 'provider_quota_or_rate_limit'
+          : providerStatus !== null && providerStatus >= 400 && providerStatus < 500
+            ? 'provider_request_rejected'
+            : providerStatus !== null && providerStatus >= 500
+              ? 'provider_server_error'
+              : 'provider_network_error';
+      console.error('[PccAiService] Provider request failed', { diagnostic, status: providerStatus, model: this.model });
+      if (diagnostic === 'provider_authentication') {
+        throw new ServiceUnavailableException('Le service IA a refusé l’authentification de la clé Groq.');
+      }
+      if (diagnostic === 'provider_quota_or_rate_limit') {
+        throw new ServiceUnavailableException('Le quota ou la limite de débit du service IA est atteint.');
+      }
+      if (diagnostic === 'provider_request_rejected') {
+        throw new BadGatewayException('Le service IA a refusé la requête. Vérifiez le modèle Groq configuré.');
+      }
       throw new ServiceUnavailableException('Le service IA est temporairement indisponible.');
     } finally {
       clearTimeout(timeout);
@@ -279,6 +299,12 @@ export class PccAiService {
     } catch {
       throw new BadGatewayException('Le service IA a renvoyé une réponse invalide.');
     }
+  }
+
+  private providerStatus(error: unknown): number | null {
+    if (!error || typeof error !== 'object') return null;
+    const status = (error as { status?: unknown }).status;
+    return typeof status === 'number' ? status : null;
   }
 
   private isAnalysis(value: unknown): value is PccAiAnalysis {
