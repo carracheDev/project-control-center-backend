@@ -166,7 +166,12 @@ export class PccAiService {
             : providerStatus !== null && providerStatus >= 500
               ? 'provider_server_error'
               : 'provider_network_error';
-      console.error('[PccAiService] Provider request failed', { diagnostic, status: providerStatus, model: this.model });
+      console.error('[PccAiService] Provider request failed', {
+        diagnostic,
+        status: providerStatus,
+        model: this.model,
+        providerMessage: this.providerMessage(error),
+      });
       if (diagnostic === 'provider_authentication') {
         throw new ServiceUnavailableException('Le service IA a refusé l’authentification de la clé Groq.');
       }
@@ -305,6 +310,16 @@ export class PccAiService {
     if (!error || typeof error !== 'object') return null;
     const status = (error as { status?: unknown }).status;
     return typeof status === 'number' ? status : null;
+  }
+
+  private providerMessage(error: unknown): string | null {
+    if (!error || typeof error !== 'object') return null;
+    const providerError = (error as { error?: { message?: unknown } }).error;
+    if (typeof providerError?.message !== 'string') return null;
+    return providerError.message
+      .replace(/gsk_[A-Za-z0-9_-]+/g, '[REDACTED_KEY]')
+      .replace(/https?:\/\/\S+/g, '[REDACTED_URL]')
+      .slice(0, 300);
   }
 
   private isAnalysis(value: unknown): value is PccAiAnalysis {
