@@ -147,7 +147,6 @@ export class PccAiService {
           { role: 'system', content: `${SYSTEM_INSTRUCTION}\n\nRéponds uniquement avec un JSON conforme à ce schéma : ${JSON.stringify(RESPONSE_SCHEMA)}` },
           { role: 'user', content: JSON.stringify({ instruction, context }) },
         ],
-        response_format: { type: 'json_object' },
         temperature: 0.1,
         max_tokens: 1_500,
         signal: controller.signal,

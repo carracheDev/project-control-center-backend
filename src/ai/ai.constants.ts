@@ -6,7 +6,6 @@ export interface GroqClient {
       create: (params: {
         model: string;
         messages: Array<{ role: 'system' | 'user'; content: string }>;
-        response_format: { type: 'json_object' };
         temperature: number;
         max_tokens: number;
         signal: AbortSignal;
