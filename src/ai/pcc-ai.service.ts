@@ -204,8 +204,9 @@ export class PccAiService {
   }
 
   async buildPhaseContext(phaseId: string): Promise<PccPhaseContext> {
-    console.log('[PccAiService] Prisma phase fetch started', { phaseId });
-    const phase = await this.prisma.phase.findUnique({
+    const startedAt = Date.now();
+    console.log('[PccAiService] Prisma phase fetch started', { phaseId, prismaServiceInjected: Boolean(this.prisma) });
+    const phasePromise = this.prisma.phase.findUnique({
       where: { id: phaseId },
       include: {
         project: { select: { name: true, description: true, startDate: true, endDate: true } },
@@ -238,12 +239,34 @@ export class PccAiService {
         validations: { orderBy: { validatedAt: 'asc' }, select: { validatedAt: true, validatedBy: true, note: true } },
       },
     });
+    let phase: Awaited<typeof phasePromise>;
+    try {
+      phase = await Promise.race([
+        phasePromise,
+        new Promise<never>((_, reject) => setTimeout(() => reject(Object.assign(new Error('Prisma phase fetch timed out after 10000ms'), { name: 'PrismaPhaseFetchTimeout' })), 10_000)),
+      ]);
+    } catch (error) {
+      const durationMs = Date.now() - startedAt;
+      const details = this.prismaErrorDetails(error);
+      console.error('[PccAiService] Prisma phase fetch failed', {
+        diagnostic: 'prisma_phase_fetch_failed',
+        phaseId,
+        durationMs,
+        ...details,
+      });
+      throw new GatewayTimeoutException({
+        message: 'La récupération de la phase depuis la base a échoué.',
+        diagnostic: 'prisma_phase_fetch_failed',
+        durationMs,
+      });
+    }
 
     if (!phase) {
+      console.log('[PccAiService] Prisma phase fetch completed', { phaseId, phaseFound: false, durationMs: Date.now() - startedAt });
       throw new BadGatewayException('Phase introuvable.');
     }
 
-    console.log('[PccAiService] Prisma phase fetch completed', { phaseId, projectId: phase.projectId });
+    console.log('[PccAiService] Prisma phase fetch completed', { phaseId, phaseFound: true, projectId: phase.projectId, durationMs: Date.now() - startedAt });
     const readinessPromise = (async () => {
       console.log('[PccAiService] Readiness calculation started', { phaseId });
       const result = await this.readinessService.calculate(phaseId);
@@ -347,6 +370,16 @@ export class PccAiService {
       .replace(/gsk_[A-Za-z0-9_-]+/g, '[REDACTED_KEY]')
       .replace(/https?:\/\/\S+/g, '[REDACTED_URL]')
       .slice(0, 300);
+  }
+
+  private prismaErrorDetails(error: unknown): { errorName: string; errorMessage: string; prismaCode: string | null } {
+    if (!error || typeof error !== 'object') return { errorName: 'UnknownError', errorMessage: String(error), prismaCode: null };
+    const value = error as { name?: unknown; message?: unknown; code?: unknown };
+    return {
+      errorName: typeof value.name === 'string' ? value.name : 'UnknownError',
+      errorMessage: typeof value.message === 'string' ? value.message.slice(0, 500) : 'Unknown Prisma error',
+      prismaCode: typeof value.code === 'string' ? value.code : null,
+    };
   }
 
   private isAnalysis(value: unknown): value is PccAiAnalysis {
