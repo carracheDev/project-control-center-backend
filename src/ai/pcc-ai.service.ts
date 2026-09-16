@@ -104,7 +104,7 @@ const RESPONSE_SCHEMA: Record<string, unknown> = {
 
 @Injectable()
 export class PccAiService {
-  private readonly model = process.env.GROQ_MODEL || 'llama-3.3-70b-versatile';
+  private readonly model = process.env.GROQ_MODEL || 'openai/gpt-oss-20b';
   private readonly timeoutMs = 30_000;
 
   constructor(
