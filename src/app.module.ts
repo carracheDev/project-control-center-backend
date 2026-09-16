@@ -24,6 +24,7 @@ import { TasksModule } from './tasks/tasks.module.js';
 import { AuditModule } from './audit/audit.module.js';
 import { NotificationsModule } from './notifications/notifications.module.js';
 import { ProjectTimelineModule } from './project-timeline/project-timeline.module.js';
+import { PccAiModule } from './ai/pcc-ai.module.js';
 
 @Module({
   imports: [
@@ -52,6 +53,7 @@ import { ProjectTimelineModule } from './project-timeline/project-timeline.modul
     CoverageModule,
     ReadinessModule,
     GatingModule,
+    PccAiModule,
   ],
 })
 export class AppModule {}
