@@ -52,8 +52,8 @@ describe('PccAiService', () => {
   });
 
   it('maps an aborted provider call to a timeout', async () => {
-    client.chat.completions.create.mockImplementation(({ signal }: { signal: AbortSignal }) => new Promise((_, reject) => {
-      signal.addEventListener('abort', () => reject(new Error('aborted')));
+    client.chat.completions.create.mockImplementation((_params: unknown, options: { signal: AbortSignal }) => new Promise((_, reject) => {
+      options.signal.addEventListener('abort', () => reject(new Error('aborted')));
     }));
     (service as unknown as { timeoutMs: number }).timeoutMs = 1;
     await expect(service.analyzePhase('phase-1')).rejects.toBeInstanceOf(GatewayTimeoutException);

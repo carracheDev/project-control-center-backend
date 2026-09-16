@@ -8,8 +8,7 @@ export interface GroqClient {
         messages: Array<{ role: 'system' | 'user'; content: string }>;
         temperature: number;
         max_tokens: number;
-        signal: AbortSignal;
-      }) => Promise<{ choices: Array<{ message: { content: string | null } }> }>;
+      }, options?: { signal?: AbortSignal }) => Promise<{ choices: Array<{ message: { content: string | null } }> }>;
     };
   };
 }

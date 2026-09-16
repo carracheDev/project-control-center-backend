@@ -149,8 +149,7 @@ export class PccAiService {
         ],
         temperature: 0.1,
         max_tokens: 1_500,
-        signal: controller.signal,
-      });
+      }, { signal: controller.signal });
       return this.parseAnalysis(response.choices[0]?.message.content ?? undefined);
     } catch (error) {
       if (error instanceof ServiceUnavailableException || error instanceof BadGatewayException) throw error;
