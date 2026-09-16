@@ -1,9 +1,9 @@
 import { Module } from '@nestjs/common';
-import { GoogleGenAI } from '@google/genai';
+import Groq from 'groq-sdk';
 import { GatingModule } from '../gating/gating.module.js';
 import { PrismaModule } from '../prisma/prisma.module.js';
 import { ReadinessModule } from '../readiness/readiness.module.js';
-import { GEMINI_CLIENT, GeminiClient } from './ai.constants.js';
+import { GROQ_CLIENT, GroqClient } from './ai.constants.js';
 import { PccAiController } from './pcc-ai.controller.js';
 import { PccAiService } from './pcc-ai.service.js';
 
@@ -13,10 +13,10 @@ import { PccAiService } from './pcc-ai.service.js';
   providers: [
     PccAiService,
     {
-      provide: GEMINI_CLIENT,
-      useFactory: (): GeminiClient | null => {
-        const apiKey = process.env.GEMINI_API_KEY?.trim();
-        return apiKey ? (new GoogleGenAI({ apiKey }) as unknown as GeminiClient) : null;
+      provide: GROQ_CLIENT,
+      useFactory: (): GroqClient | null => {
+        const apiKey = process.env.GROQ_API_KEY?.trim();
+        return apiKey ? (new Groq({ apiKey }) as unknown as GroqClient) : null;
       },
     },
   ],

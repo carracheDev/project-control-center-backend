@@ -1,18 +1,16 @@
-export const GEMINI_CLIENT = Symbol('GEMINI_CLIENT');
+export const GROQ_CLIENT = Symbol('GROQ_CLIENT');
 
-export interface GeminiClient {
-  models: {
-    generateContent: (params: {
-      model: string;
-      contents: string;
-      config: {
-        systemInstruction: string;
-        responseMimeType: string;
-        responseJsonSchema: Record<string, unknown>;
+export interface GroqClient {
+  chat: {
+    completions: {
+      create: (params: {
+        model: string;
+        messages: Array<{ role: 'system' | 'user'; content: string }>;
+        response_format: { type: 'json_object' };
         temperature: number;
-        maxOutputTokens: number;
-        abortSignal: AbortSignal;
-      };
-    }) => Promise<{ text?: string }>;
+        max_tokens: number;
+        signal: AbortSignal;
+      }) => Promise<{ choices: Array<{ message: { content: string | null } }> }>;
+    };
   };
 }

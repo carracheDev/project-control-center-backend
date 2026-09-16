@@ -5,7 +5,7 @@ describe('PccAiService', () => {
   const prisma = { phase: { findUnique: vi.fn() } };
   const readinessService = { calculate: vi.fn() };
   const gatingService = { calculate: vi.fn() };
-  const client = { models: { generateContent: vi.fn() } };
+  const client = { chat: { completions: { create: vi.fn() } } };
   let service: PccAiService;
 
   beforeEach(() => {
@@ -34,26 +34,26 @@ describe('PccAiService', () => {
     expect(gatingService.calculate).toHaveBeenCalledWith('phase-1');
   });
 
-  it('parses a structured Gemini response', async () => {
-    client.models.generateContent.mockResolvedValue({ text: JSON.stringify({
+  it('parses a structured Groq response', async () => {
+    client.chat.completions.create.mockResolvedValue({ choices: [{ message: { content: JSON.stringify({
       status: 'NOT_READY', summary: 'Blocked', strengths: ['Evidence'], blockers: ['Criterion'], missingInformation: [], contradictions: [], recommendations: ['Assess criterion'], validationAdvice: 'Do not validate yet',
-    }) });
+    }) } }] });
     await expect(service.analyzePhase('phase-1')).resolves.toMatchObject({ status: 'NOT_READY', blockers: ['Criterion'] });
   });
 
   it('rejects an invalid Gemini response', async () => {
-    client.models.generateContent.mockResolvedValue({ text: '{invalid' });
+    client.chat.completions.create.mockResolvedValue({ choices: [{ message: { content: '{invalid' } }] });
     await expect(service.analyzePhase('phase-1')).rejects.toBeInstanceOf(BadGatewayException);
   });
 
   it('maps provider failures without exposing internal details', async () => {
-    client.models.generateContent.mockRejectedValue(new Error('quota or secret details'));
+    client.chat.completions.create.mockRejectedValue(new Error('quota or secret details'));
     await expect(service.analyzePhase('phase-1')).rejects.toBeInstanceOf(ServiceUnavailableException);
   });
 
   it('maps an aborted provider call to a timeout', async () => {
-    client.models.generateContent.mockImplementation(({ config }: { config: { abortSignal: AbortSignal } }) => new Promise((_, reject) => {
-      config.abortSignal.addEventListener('abort', () => reject(new Error('aborted')));
+    client.chat.completions.create.mockImplementation(({ signal }: { signal: AbortSignal }) => new Promise((_, reject) => {
+      signal.addEventListener('abort', () => reject(new Error('aborted')));
     }));
     (service as unknown as { timeoutMs: number }).timeoutMs = 1;
     await expect(service.analyzePhase('phase-1')).rejects.toBeInstanceOf(GatewayTimeoutException);

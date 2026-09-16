@@ -9,7 +9,7 @@ import {
 import { PrismaService } from '../prisma/prisma.service.js';
 import { GatingService, GatingResult } from '../gating/gating.service.js';
 import { ReadinessService, PhaseReadinessResult } from '../readiness/readiness.service.js';
-import { GEMINI_CLIENT, GeminiClient } from './ai.constants.js';
+import { GROQ_CLIENT, GroqClient } from './ai.constants.js';
 
 export type AiAnalysisStatus = 'READY' | 'NOT_READY' | 'ATTENTION';
 
@@ -104,19 +104,19 @@ const RESPONSE_SCHEMA: Record<string, unknown> = {
 
 @Injectable()
 export class PccAiService {
-  private readonly model = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
+  private readonly model = process.env.GROQ_MODEL || 'llama-3.3-70b-versatile';
   private readonly timeoutMs = 30_000;
 
   constructor(
     private readonly prisma: PrismaService,
     private readonly readinessService: ReadinessService,
     private readonly gatingService: GatingService,
-    @Optional() @Inject(GEMINI_CLIENT) private readonly gemini: GeminiClient | null,
+    @Optional() @Inject(GROQ_CLIENT) private readonly groq: GroqClient | null,
   ) {}
 
   async analyzePhase(phaseId: string): Promise<PccAiAnalysis> {
-    if (!this.gemini) {
-      throw new ServiceUnavailableException('Le service IA est indisponible: GEMINI_API_KEY n’est pas configurée.');
+    if (!this.groq) {
+      throw new ServiceUnavailableException('Le service IA est indisponible: GROQ_API_KEY n’est pas configurée.');
     }
 
     const context = await this.buildPhaseContext(phaseId);
@@ -124,8 +124,8 @@ export class PccAiService {
   }
 
   async chatPhase(phaseId: string, message: string): Promise<PccAiAnalysis> {
-    if (!this.gemini) {
-      throw new ServiceUnavailableException('Le service IA est indisponible: GEMINI_API_KEY n’est pas configurée.');
+    if (!this.groq) {
+      throw new ServiceUnavailableException('Le service IA est indisponible: GROQ_API_KEY n’est pas configurée.');
     }
 
     const context = await this.buildPhaseContext(phaseId);
@@ -133,27 +133,26 @@ export class PccAiService {
   }
 
   private async requestAnalysis(context: PccPhaseContext, instruction: string): Promise<PccAiAnalysis> {
-    const gemini = this.gemini;
-    if (!gemini) {
-      throw new ServiceUnavailableException('Le service IA est indisponible: GEMINI_API_KEY n’est pas configurée.');
+    const groq = this.groq;
+    if (!groq) {
+      throw new ServiceUnavailableException('Le service IA est indisponible: GROQ_API_KEY n’est pas configurée.');
     }
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
 
     try {
-      const response = await gemini.models.generateContent({
+      const response = await groq.chat.completions.create({
         model: this.model,
-        contents: JSON.stringify({ instruction, context }),
-        config: {
-          systemInstruction: SYSTEM_INSTRUCTION,
-          responseMimeType: 'application/json',
-          responseJsonSchema: RESPONSE_SCHEMA,
-          temperature: 0.1,
-          maxOutputTokens: 1_500,
-          abortSignal: controller.signal,
-        },
+        messages: [
+          { role: 'system', content: `${SYSTEM_INSTRUCTION}\n\nRéponds uniquement avec un JSON conforme à ce schéma : ${JSON.stringify(RESPONSE_SCHEMA)}` },
+          { role: 'user', content: JSON.stringify({ instruction, context }) },
+        ],
+        response_format: { type: 'json_object' },
+        temperature: 0.1,
+        max_tokens: 1_500,
+        signal: controller.signal,
       });
-      return this.parseAnalysis(response.text);
+      return this.parseAnalysis(response.choices[0]?.message.content ?? undefined);
     } catch (error) {
       if (error instanceof ServiceUnavailableException || error instanceof BadGatewayException) throw error;
       if (controller.signal.aborted) throw new GatewayTimeoutException('Le service IA n’a pas répondu à temps.');
