@@ -97,6 +97,11 @@ enum RiskStatus {
   CLOSED
 }
 
+enum ChatRole {
+  USER
+  ASSISTANT
+}
+
 enum NotificationStatus {
   UNREAD
   READ
@@ -117,6 +122,7 @@ model Project {
   members     ProjectMember[]
   risks       Risk[]
   notifications Notification[]
+  chatSessions ChatSession[]
 }
 
 model User {
@@ -223,6 +229,7 @@ model Phase {
   coverageRequirements CoverageRequirement[]
   validations PhaseValidation[]
   risks       Risk[]
+  chatSessions ChatSession[]
 
   @@unique([projectId, order])
   @@index([projectId])
@@ -367,9 +374,42 @@ model Interview {
   questionnaire  Questionnaire   @relation(fields: [questionnaireId], references: [id], onDelete: Cascade)
   responses      Response[]
   evidences      Evidence[]
+  chatSessions   ChatSession[]
 
   @@index([phaseId])
   @@index([questionnaireId])
+}
+
+model ChatSession {
+  id          String    @id @default(cuid())
+  interviewId String?
+  projectId   String?
+  phaseId     String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  interview Interview? @relation(fields: [interviewId], references: [id], onDelete: Cascade)
+  project   Project?   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  phase     Phase?     @relation(fields: [phaseId], references: [id], onDelete: Cascade)
+  messages  ChatMessage[]
+
+  @@index([interviewId])
+  @@index([projectId])
+  @@index([phaseId])
+}
+
+model ChatMessage {
+  id        String   @id @default(cuid())
+  sessionId String
+  role      ChatRole
+  content   String
+  intent    String?
+  metadata  Json?
+  createdAt DateTime @default(now())
+
+  session ChatSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId, createdAt])
 }
 
 model Response {

@@ -20,6 +20,6 @@ export class PccAiController {
   @Post('phases/:phaseId/chat')
   @ProjectAccess('phaseId', 'phase', ProjectMemberRole.VIEWER)
   askQuestion(@Param('phaseId') phaseId: string, @Body() dto: AskPccQuestionDto) {
-    return this.aiService.chatPhase(phaseId, dto.message);
+    return this.aiService.chatPhase(phaseId, dto.message, dto.sessionId, dto.interviewId);
   }
 }

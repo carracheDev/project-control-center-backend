@@ -3,6 +3,7 @@ import {
   GatewayTimeoutException,
   Inject,
   Injectable,
+  NotFoundException,
   Optional,
   ServiceUnavailableException,
 } from '@nestjs/common';
@@ -22,6 +23,26 @@ export interface PccAiAnalysis {
   contradictions: string[];
   recommendations: string[];
   validationAdvice: string;
+}
+
+export type PccAiIntent = 'QUESTION' | 'SUMMARY' | 'FIND_EVIDENCE' | 'IDENTIFY_GAPS' | 'COMPARE' | 'NEXT_QUESTION' | 'CRITERION_CHECK' | 'ANALYZE';
+export type PccAiConfidence = 'HIGH' | 'MEDIUM' | 'LOW';
+
+export interface PccAiChatResponse {
+  answer: string;
+  intent: PccAiIntent;
+  confidence: PccAiConfidence;
+  evidence: Array<{ id: string; type: 'INTERVIEW_ANSWER' | 'EVIDENCE' | 'CRITERION' | 'OBJECTIVE'; label: string; excerpt?: string }>;
+  missingInformation: string[];
+  suggestedNextQuestions: string[];
+  criterionAssessment?: {
+    status: 'SATISFIED' | 'PARTIALLY_SATISFIED' | 'NOT_SATISFIED' | 'INSUFFICIENT_EVIDENCE';
+    reason: string;
+  };
+}
+
+export interface PccAiChatResult extends PccAiChatResponse {
+  sessionId: string;
 }
 
 export interface PccPhaseContext {
@@ -87,6 +108,14 @@ Si les données sont insuffisantes, dis-le explicitement.
 Ne fabrique jamais d'information absente des données fournies.
 La propriété validationAdvice est uniquement un conseil et ne déclenche aucune action.`;
 
+const CHAT_SYSTEM_INSTRUCTION = `Tu es PCC Intelligence, un assistant contextuel de validation.
+Réponds à la question de l'utilisateur uniquement à partir des données originales PCC fournies.
+Les réponses d'interview et les preuves sont prioritaires sur toute analyse précédente.
+Ne fabrique jamais de chiffre, date, nom, citation ou fait absent. Si une information manque, dis-le clairement.
+Distingue les faits, les déductions et les informations manquantes.
+Utilise uniquement les IDs de réponses et de preuves fournis pour les citations.
+Réponds directement à la question, en français, sans reprendre automatiquement une analyse générale.`;
+
 const RESPONSE_SCHEMA: Record<string, unknown> = {
   type: 'object',
   required: ['status', 'summary', 'strengths', 'blockers', 'missingInformation', 'contradictions', 'recommendations', 'validationAdvice'],
@@ -99,6 +128,20 @@ const RESPONSE_SCHEMA: Record<string, unknown> = {
     contradictions: { type: 'array', items: { type: 'string' } },
     recommendations: { type: 'array', items: { type: 'string' } },
     validationAdvice: { type: 'string' },
+  },
+};
+
+const CHAT_RESPONSE_SCHEMA: Record<string, unknown> = {
+  type: 'object',
+  required: ['answer', 'intent', 'confidence', 'evidence', 'missingInformation', 'suggestedNextQuestions'],
+  properties: {
+    answer: { type: 'string' },
+    intent: { type: 'string', enum: ['QUESTION', 'SUMMARY', 'FIND_EVIDENCE', 'IDENTIFY_GAPS', 'COMPARE', 'NEXT_QUESTION', 'CRITERION_CHECK', 'ANALYZE'] },
+    confidence: { type: 'string', enum: ['HIGH', 'MEDIUM', 'LOW'] },
+    evidence: { type: 'array', items: { type: 'object', required: ['id', 'type', 'label'], properties: { id: { type: 'string' }, type: { type: 'string', enum: ['INTERVIEW_ANSWER', 'EVIDENCE', 'CRITERION', 'OBJECTIVE'] }, label: { type: 'string' }, excerpt: { type: 'string' } } } },
+    missingInformation: { type: 'array', items: { type: 'string' } },
+    suggestedNextQuestions: { type: 'array', items: { type: 'string' } },
+    criterionAssessment: { type: 'object', required: ['status', 'reason'], properties: { status: { type: 'string' }, reason: { type: 'string' } } },
   },
 };
 
@@ -137,13 +180,85 @@ export class PccAiService {
     return this.requestAnalysis(context, 'Analyse cette phase PCC et explique clairement sa situation actuelle.');
   }
 
-  async chatPhase(phaseId: string, message: string): Promise<PccAiAnalysis> {
+  async chatPhase(phaseId: string, message: string, sessionId?: string, interviewId?: string): Promise<PccAiChatResult> {
+    if (message.trim().length === 0) throw new BadGatewayException('La question ne peut pas être vide.');
     if (!this.groq) {
       throw new ServiceUnavailableException('Le service IA est indisponible: GROQ_API_KEY n’est pas configurée.');
     }
 
-    const context = await this.buildPhaseContext(phaseId);
-    return this.requestAnalysis(context, `Réponds à cette question de l'utilisateur à partir des faits PCC fournis : ${message}`);
+    const session = await this.getOrCreateChatSession(phaseId, sessionId, interviewId);
+    const history = await this.prisma.chatMessage.findMany({
+      where: { sessionId: session.id },
+      orderBy: { createdAt: 'desc' },
+      take: 12,
+      select: { role: true, content: true },
+    });
+    const context = await this.buildChatContext(phaseId, session.interviewId ?? interviewId, history.reverse());
+    await this.prisma.chatMessage.create({ data: { sessionId: session.id, role: 'USER', content: message.trim() } });
+    const groq = this.groq;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
+    try {
+      const response = await groq.chat.completions.create({
+        model: this.model,
+        messages: [
+          { role: 'system', content: `${CHAT_SYSTEM_INSTRUCTION}\n\nRéponds uniquement avec un JSON conforme à ce schéma : ${JSON.stringify(CHAT_RESPONSE_SCHEMA)}` },
+          { role: 'user', content: JSON.stringify({ question: message.trim(), context }) },
+        ],
+        temperature: 0.1,
+        max_tokens: 1_500,
+      }, { signal: controller.signal });
+      const parsed = this.parseChatResponse(response.choices[0]?.message.content ?? undefined);
+      const validIds = new Set([...context.answers.map((answer) => answer.id), ...context.evidence.map((item) => item.id), ...context.criteria.map((item) => item.id), ...context.objectives.map((item) => item.id)]);
+      const result = { ...parsed, evidence: parsed.evidence.filter((item) => validIds.has(item.id)), sessionId: session.id };
+      await this.prisma.chatMessage.create({ data: { sessionId: session.id, role: 'ASSISTANT', content: result.answer, intent: result.intent, metadata: result } });
+      return result;
+    } catch (error) {
+      if (error instanceof BadGatewayException || error instanceof ServiceUnavailableException) throw error;
+      if (controller.signal.aborted) throw new GatewayTimeoutException('Le service IA n’a pas répondu à temps.');
+      throw new ServiceUnavailableException('Le service IA est temporairement indisponible.');
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  private async getOrCreateChatSession(phaseId: string, sessionId?: string, interviewId?: string) {
+    if (sessionId) {
+      const session = await this.prisma.chatSession.findUnique({ where: { id: sessionId } });
+      if (!session || session.phaseId !== phaseId) throw new NotFoundException('Session de chat introuvable.');
+      if (interviewId && session.interviewId && session.interviewId !== interviewId) throw new NotFoundException('La session ne correspond pas à cette interview.');
+      return session;
+    }
+    return this.prisma.chatSession.create({ data: { phaseId, interviewId } });
+  }
+
+  private async buildChatContext(phaseId: string, interviewId?: string | null, history: Array<{ role: string; content: string }> = []) {
+    const phase = await this.prisma.phase.findUnique({
+      where: { id: phaseId },
+      include: {
+        project: { select: { name: true } },
+        objectives: { select: { id: true, name: true, description: true } },
+        criteria: { select: { id: true, name: true, description: true, required: true } },
+        interviews: {
+          where: interviewId ? { id: interviewId } : undefined,
+          orderBy: { createdAt: 'asc' },
+          include: { responses: { include: { question: { select: { id: true, text: true } } } } },
+        },
+        evidences: { orderBy: { createdAt: 'asc' }, select: { id: true, title: true, type: true, description: true, note: true, interviewId: true } },
+      },
+    });
+    if (!phase) throw new BadGatewayException('Phase introuvable.');
+    if (interviewId && phase.interviews.length === 0) throw new NotFoundException('Interview introuvable dans cette phase.');
+    return {
+      project: phase.project,
+      phase: { id: phase.id, name: phase.name, description: phase.description, status: phase.status },
+      objectives: phase.objectives,
+      criteria: phase.criteria,
+      interviews: phase.interviews.map((interview) => ({ id: interview.id, respondentName: interview.respondentName, respondentRole: interview.respondentRole, organization: interview.organization, status: interview.status, notes: interview.notes })),
+      answers: phase.interviews.flatMap((interview) => interview.responses.map((response) => ({ id: response.id, interviewId: interview.id, respondentName: interview.respondentName, questionId: response.question.id, question: response.question.text, value: response.value }))),
+      evidence: phase.evidences,
+      conversationHistory: history,
+    };
   }
 
   private async requestAnalysis(context: PccPhaseContext, instruction: string): Promise<PccAiAnalysis> {
@@ -356,6 +471,17 @@ export class PccAiService {
     }
   }
 
+  private parseChatResponse(text: string | undefined): PccAiChatResponse {
+    if (!text) throw new BadGatewayException('Le service IA a renvoyé une réponse vide.');
+    try {
+      const parsed: unknown = JSON.parse(text.replace(/^```json\s*/i, '').replace(/\s*```$/, '').trim());
+      if (!this.isChatResponse(parsed)) throw new Error('invalid shape');
+      return parsed;
+    } catch {
+      throw new BadGatewayException('Le service IA a renvoyé une réponse de chat invalide.');
+    }
+  }
+
   private providerStatus(error: unknown): number | null {
     if (!error || typeof error !== 'object') return null;
     const status = (error as { status?: unknown }).status;
@@ -390,5 +516,34 @@ export class PccAiService {
       && typeof candidate.summary === 'string'
       && typeof candidate.validationAdvice === 'string'
       && arrays.every((key) => Array.isArray(candidate[key]) && (candidate[key] as unknown[]).every((item) => typeof item === 'string'));
+  }
+
+  private isChatResponse(value: unknown): value is PccAiChatResponse {
+    if (!value || typeof value !== 'object') return false;
+    const candidate = value as Record<string, unknown>;
+    const intents: PccAiIntent[] = ['QUESTION', 'SUMMARY', 'FIND_EVIDENCE', 'IDENTIFY_GAPS', 'COMPARE', 'NEXT_QUESTION', 'CRITERION_CHECK', 'ANALYZE'];
+    const confidences: PccAiConfidence[] = ['HIGH', 'MEDIUM', 'LOW'];
+    const evidence = candidate.evidence;
+    return typeof candidate.answer === 'string'
+      && intents.includes(candidate.intent as PccAiIntent)
+      && confidences.includes(candidate.confidence as PccAiConfidence)
+      && Array.isArray(evidence)
+      && evidence.every((item) => {
+        if (!item || typeof item !== 'object') return false;
+        const entry = item as Record<string, unknown>;
+        return typeof entry.id === 'string'
+          && ['INTERVIEW_ANSWER', 'EVIDENCE', 'CRITERION', 'OBJECTIVE'].includes(entry.type as string)
+          && typeof entry.label === 'string'
+          && (entry.excerpt === undefined || typeof entry.excerpt === 'string');
+      })
+      && ['missingInformation', 'suggestedNextQuestions'].every((key) => Array.isArray(candidate[key]) && (candidate[key] as unknown[]).every((item) => typeof item === 'string'))
+      && (candidate.criterionAssessment === undefined || this.isCriterionAssessment(candidate.criterionAssessment));
+  }
+
+  private isCriterionAssessment(value: unknown): value is PccAiChatResponse['criterionAssessment'] {
+    if (!value || typeof value !== 'object') return false;
+    const candidate = value as Record<string, unknown>;
+    return ['SATISFIED', 'PARTIALLY_SATISFIED', 'NOT_SATISFIED', 'INSUFFICIENT_EVIDENCE'].includes(candidate.status as string)
+      && typeof candidate.reason === 'string';
   }
 }
